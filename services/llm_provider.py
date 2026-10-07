@@ -40,7 +40,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-_DEFAULT_MODEL    = "openai/gpt-4o-mini"
+_DEFAULT_MODEL    = "openrouter/free"
 
 
 class LLMConfig:
@@ -130,6 +130,11 @@ def get_completion(
         client = openai.OpenAI(
             api_key=cfg.api_key,
             base_url=cfg.base_url,
+            timeout=cfg.timeout,
+            default_headers={
+                "HTTP-Referer": "https://ecosort-ai.local",
+                "X-Title": "EcoSort AI",
+            },
         )
 
         response = client.chat.completions.create(
@@ -140,12 +145,20 @@ def get_completion(
             ],
             max_tokens=cfg.max_tokens,
             temperature=cfg.temperature,
-            timeout=cfg.timeout,
         )
 
-        return response.choices[0].message.content or ""
+        if not response or not response.choices:
+            raise LLMRequestError("Received empty response choices from LLM provider.")
+
+        content = response.choices[0].message.content
+        if content is None or not content.strip():
+            raise LLMRequestError("Received empty completion text from LLM provider.")
+
+        return content.strip()
 
     except LLMNotConfiguredError:
+        raise
+    except LLMRequestError:
         raise
     except ImportError as exc:
         raise LLMRequestError(

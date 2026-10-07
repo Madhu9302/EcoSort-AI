@@ -116,6 +116,6 @@ class OrchestratorAgent:
     def answer_question(self, question: str, context: dict | None = None) -> str:
         """Forward a free-text question to the EcoAssistantAgent."""
         try:
-            return self._get_assistant_agent().answer(question)
+            return self._get_assistant_agent().answer(question, context=context)
         except Exception as exc:
             return f"Eco Assistant encountered an error: {exc}"

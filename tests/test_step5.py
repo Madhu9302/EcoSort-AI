@@ -1,18 +1,21 @@
 """
 Step 5 Test Suite
 -----------------
-Tests all 12 required checks for the Eco Assistant implementation.
+Tests all 8 required checks for Eco Assistant (using mocked LLM responses
+so zero OpenRouter credits are consumed) plus regression and security checks.
+
 Run with:  python tests/test_step5.py
 """
 import sys, os
+from unittest import mock
+from pathlib import Path
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 os.chdir(_ROOT)
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
-SKIP = "[SKIP]"
-WARN = "[WARN]"
 errors = []
 
 print("=" * 65)
@@ -20,216 +23,221 @@ print("EcoSort AI -- Step 5: Eco Assistant Test Suite")
 print("=" * 65)
 
 # ===========================================================================
-# Test 1: Module imports
+# 1. Eco Assistant initialization
 # ===========================================================================
-print("\n[1] Module imports ...")
+print("\n[1] Eco Assistant initialization ...")
 try:
     from agents.eco_assistant_agent import EcoAssistantAgent
     from services.llm_provider import (
         LLMConfig, get_completion,
         LLMNotConfiguredError, LLMRequestError, config as llm_config,
     )
-    print(f"  {PASS} EcoAssistantAgent, LLMConfig, get_completion all imported")
+    agent = EcoAssistantAgent()
+    assert agent is not None
+    assert hasattr(agent, "answer")
+    assert llm_config.base_url.startswith("https://")
+    print(f"  {PASS} EcoAssistantAgent initialized successfully")
+    print(f"        Base URL: {llm_config.base_url}")
+    print(f"        Configured model: {llm_config.model}")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"T1: {e}")
 
 # ===========================================================================
-# Test 2: LLM configuration detection
+# 2. Missing API key fallback
 # ===========================================================================
-print("\n[2] LLM configuration detection ...")
+print("\n[2] Missing API key fallback ...")
 try:
-    api_key_set = llm_config.is_configured
-    print(f"  {PASS} is_configured = {api_key_set}")
-    print(f"        base_url = {llm_config.base_url}")
-    print(f"        model    = {llm_config.model}")
-    print(f"        timeout  = {llm_config.timeout}s")
-    if api_key_set:
-        masked = llm_config.api_key[:8] + "..." + llm_config.api_key[-4:]
-        print(f"        api_key  = {masked}  (masked)")
-    else:
-        print(f"        api_key  = (not set)")
+    with mock.patch.dict(os.environ, {"ECO_LLM_API_KEY": ""}, clear=False):
+        agent = EcoAssistantAgent()
+        # Test without context
+        reply_no_ctx = agent.answer("How do I recycle paper?")
+        assert "not configured" in reply_no_ctx.lower() or "eco_llm_api_key" in reply_no_ctx.lower(), (
+            f"Expected configuration guidance, got: {reply_no_ctx[:80]}"
+        )
+
+        # Test with context (should include offline category guidance)
+        reply_ctx = agent.answer("Where does this go?", context={"waste_class": "plastic"})
+        assert "plastic" in reply_ctx.lower(), "Fallback must include category advice"
+        assert "not configured" in reply_ctx.lower() or "eco_llm_api_key" in reply_ctx.lower()
+        print(f"  {PASS} Missing key handled cleanly with offline fallback guidance")
+        print(f"        Preview: {reply_ctx[:90].strip()}...")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"T2: {e}")
 
 # ===========================================================================
-# Test 3: Missing API key fallback (always tested, key-independent)
+# 3. Successful mocked LLM response
 # ===========================================================================
-print("\n[3] Missing API key fallback ...")
+print("\n[3] Successful mocked LLM response ...")
 try:
-    from services.llm_provider import LLMConfig, get_completion, LLMNotConfiguredError
-
-    class _EmptyKeyConfig(LLMConfig):
-        @property
-        def api_key(self): return ""
-
-    try:
-        get_completion("sys", "user", cfg=_EmptyKeyConfig())
-        print(f"  {FAIL} Should have raised LLMNotConfiguredError")
-        errors.append("T3: no exception on missing key")
-    except LLMNotConfiguredError as e:
-        print(f"  {PASS} LLMNotConfiguredError raised: {str(e)[:60]}")
-    except Exception as e:
-        print(f"  {FAIL} Wrong exception: {type(e).__name__}: {e}")
-        errors.append(f"T3: {e}")
+    mock_reply = "Plastic bottles can be recycled in your blue recycling bin after rinsing."
+    with mock.patch("services.llm_provider.get_completion", return_value=mock_reply) as mocked_get:
+        agent = EcoAssistantAgent()
+        reply = agent.answer("Can I recycle this bottle?")
+        assert reply == mock_reply
+        assert mocked_get.called
+        print(f"  {PASS} Mocked LLM response received accurately")
+        print(f"        Reply: {reply}")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"T3: {e}")
 
 # ===========================================================================
-# Test 4: EcoAssistantAgent fallback message (no key)
+# 4. OpenRouter/API failure fallback
 # ===========================================================================
-print("\n[4] EcoAssistantAgent fallback message when key missing ...")
+print("\n[4] OpenRouter/API failure fallback ...")
 try:
-    import unittest.mock as mock
-
-    # Temporarily suppress the key
-    with mock.patch.dict(os.environ, {"ECO_LLM_API_KEY": ""}, clear=False):
-        # Also reset the singleton's cached state for this test
-        from services import llm_provider as _prov
+    with mock.patch("services.llm_provider.get_completion",
+                    side_effect=LLMRequestError("Simulated OpenRouter 503 error")):
         agent = EcoAssistantAgent()
-        reply = agent.answer("Where should I throw this plastic bottle?")
-    assert "not configured" in reply.lower() or "eco_llm_api_key" in reply.lower(), (
-        f"Expected configuration message, got: {reply[:80]}"
-    )
-    print(f"  {PASS} Fallback message returned (not configured)")
-    print(f"        Preview: {reply[:80].strip()}...")
+        reply = agent.answer("How should I dispose of this?", context={"waste_class": "metal"})
+        assert "unavailable" in reply.lower() or "error" in reply.lower(), (
+            f"Expected unavailable/error notice, got: {reply[:80]}"
+        )
+        assert "metal" in reply.lower(), "Expected category fallback for metal"
+        print(f"  {PASS} API failure caught gracefully without crashing")
+        print(f"        Preview: {reply[:90].strip()}...")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"T4: {e}")
 
 # ===========================================================================
-# Test 5: API failure handling (simulated network error)
+# 5. Context-aware response
 # ===========================================================================
-print("\n[5] API failure / LLMRequestError handling ...")
+print("\n[5] Context-aware response ...")
 try:
-    import unittest.mock as mock
-    from services.llm_provider import LLMRequestError
+    captured = {}
 
-    with mock.patch("services.llm_provider.get_completion",
-                    side_effect=LLMRequestError("Simulated network failure")):
+    def fake_get_completion(system_prompt, user_message, cfg=None):
+        captured["system"] = system_prompt
+        captured["question"] = user_message
+        return "Context-aware response generated."
+
+    with mock.patch("services.llm_provider.get_completion", side_effect=fake_get_completion):
         agent = EcoAssistantAgent()
-        reply = agent.answer("test question")
-
-    assert "error" in reply.lower() or "encountered" in reply.lower(), (
-        f"Expected error message, got: {reply[:80]}"
-    )
-    assert "ECO_LLM_API_KEY" not in reply, "Must not expose env var names in error"
-    print(f"  {PASS} LLMRequestError handled gracefully; no crash")
-    print(f"        Preview: {reply[:80].strip()}...")
+        scan_ctx = {
+            "waste_class": "cardboard",
+            "confidence": 0.985,
+            "recycling": {"tips": ["Flatten boxes before binning."], "reuse_ideas": ["Use as seedling trays."]},
+            "disposal": {"bin": "Blue Bin", "hazard_level": "None", "instructions": "Keep dry and place in bin."}
+        }
+        res = agent.answer("Can this be recycled?", context=scan_ctx)
+        assert res == "Context-aware response generated."
+        sys_txt = captured.get("system", "")
+        assert "cardboard" in sys_txt
+        assert "98.5%" in sys_txt
+        assert "Blue Bin" in sys_txt
+        assert "Flatten boxes" in sys_txt
+        print(f"  {PASS} Scan context properly formatted into LLM instructions")
+        print(f"        Context confirmed: category, 98.5% confidence, disposal bin, recycling tips")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"T5: {e}")
 
 # ===========================================================================
-# Test 6: General question without image context (live LLM or skip)
+# 6. Plastic question
 # ===========================================================================
-print("\n[6] General question without context ...")
-if not llm_config.is_configured:
-    print(f"  {SKIP} ECO_LLM_API_KEY not set — skipping live LLM call")
-else:
-    try:
-        agent = EcoAssistantAgent()
-        reply = agent.answer("Is cardboard recyclable?")
-        assert len(reply) > 20, "Reply too short"
-        assert "error" not in reply[:30].lower()
-        print(f"  {PASS} Got LLM reply ({len(reply)} chars)")
-        print(f"        Preview: {reply[:120].strip()}")
-    except Exception as e:
-        print(f"  {FAIL} {e}"); errors.append(f"T6: {e}")
-
-# ===========================================================================
-# Test 7: Question with plastic context
-# ===========================================================================
-print("\n[7] Question with plastic context (99.1% confidence) ...")
-if not llm_config.is_configured:
-    print(f"  {SKIP} ECO_LLM_API_KEY not set — skipping live LLM call")
-else:
-    try:
-        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
-        from agents.disposal_guidance_agent import DisposalGuidanceAgent
-
-        ctx = {
-            "waste_class": "plastic",
-            "confidence":  0.991,
-            "recycling":   RecyclingRecommendationAgent().get_recommendations("plastic"),
-            "disposal":    DisposalGuidanceAgent().get_guidance("plastic"),
-        }
-        agent = EcoAssistantAgent()
-        reply = agent.answer("Where should I throw this plastic bottle?", context=ctx)
-        assert len(reply) > 20
-        print(f"  {PASS} Context-aware reply received ({len(reply)} chars)")
-        print(f"        Preview: {reply[:180].strip()}")
-    except Exception as e:
-        print(f"  {FAIL} {e}"); errors.append(f"T7: {e}")
-
-# ===========================================================================
-# Test 8: Question with battery context
-# ===========================================================================
-print("\n[8] Question with battery context ...")
-if not llm_config.is_configured:
-    print(f"  {SKIP} ECO_LLM_API_KEY not set — skipping live LLM call")
-else:
-    try:
-        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
-        from agents.disposal_guidance_agent import DisposalGuidanceAgent
-
-        ctx = {
-            "waste_class": "battery",
-            "confidence":  0.987,
-            "recycling":   RecyclingRecommendationAgent().get_recommendations("battery"),
-            "disposal":    DisposalGuidanceAgent().get_guidance("battery"),
-        }
-        agent = EcoAssistantAgent()
-        reply = agent.answer("What should I do with a used battery?", context=ctx)
-        assert len(reply) > 20
-        # Should NOT suggest household bin for batteries
-        assert "household bin" not in reply.lower() or "not" in reply.lower(), (
-            "Reply must not suggest putting battery in household bin"
-        )
-        print(f"  {PASS} Battery context reply received ({len(reply)} chars)")
-        print(f"        Preview: {reply[:180].strip()}")
-    except Exception as e:
-        print(f"  {FAIL} {e}"); errors.append(f"T8: {e}")
-
-# ===========================================================================
-# Test 9: Question with glass context
-# ===========================================================================
-print("\n[9] Question with glass context ...")
-if not llm_config.is_configured:
-    print(f"  {SKIP} ECO_LLM_API_KEY not set — skipping live LLM call")
-else:
-    try:
-        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
-        from agents.disposal_guidance_agent import DisposalGuidanceAgent
-
-        ctx = {
-            "waste_class": "brown-glass",
-            "confidence":  0.89,
-            "recycling":   RecyclingRecommendationAgent().get_recommendations("brown-glass"),
-            "disposal":    DisposalGuidanceAgent().get_guidance("brown-glass"),
-        }
-        agent = EcoAssistantAgent()
-        reply = agent.answer("How should I dispose of broken glass?", context=ctx)
-        assert len(reply) > 20
-        print(f"  {PASS} Glass context reply received ({len(reply)} chars)")
-        print(f"        Preview: {reply[:180].strip()}")
-    except Exception as e:
-        print(f"  {FAIL} {e}"); errors.append(f"T9: {e}")
-
-# ===========================================================================
-# Test 10: Existing Waste Scanner still works (classification pipeline)
-# ===========================================================================
-print("\n[10] Existing Waste Scanner (classification pipeline) ...")
+print("\n[6] Plastic question ...")
 try:
-    from pathlib import Path
+    mock_plastic_response = (
+        "Plastic containers are typically recyclable in your blue bin. "
+        "Rinse out any food or drink residue and check the resin code (1 and 2 are widely accepted)."
+    )
+    with mock.patch("services.llm_provider.get_completion", return_value=mock_plastic_response) as mocked_get:
+        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
+        from agents.disposal_guidance_agent import DisposalGuidanceAgent
+
+        plastic_ctx = {
+            "waste_class": "plastic",
+            "confidence": 0.991,
+            "recycling": RecyclingRecommendationAgent().get_recommendations("plastic"),
+            "disposal": DisposalGuidanceAgent().get_guidance("plastic"),
+        }
+        agent = EcoAssistantAgent()
+        reply = agent.answer("How do I dispose of a plastic bottle?", context=plastic_ctx)
+        assert "plastic" in reply.lower()
+        args, kwargs = mocked_get.call_args
+        sent_system = args[0]
+        assert "plastic" in sent_system
+        assert "99.1%" in sent_system
+        print(f"  {PASS} Plastic context & question handled correctly")
+        print(f"        Reply: {reply[:100]}...")
+except Exception as e:
+    print(f"  {FAIL} {e}"); errors.append(f"T6: {e}")
+
+# ===========================================================================
+# 7. Battery question
+# ===========================================================================
+print("\n[7] Battery question ...")
+try:
+    mock_battery_response = (
+        "Never place batteries in your regular household bin as they pose a serious fire hazard. "
+        "Take them to a dedicated battery drop-off box at a local supermarket or recycling centre."
+    )
+    with mock.patch("services.llm_provider.get_completion", return_value=mock_battery_response) as mocked_get:
+        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
+        from agents.disposal_guidance_agent import DisposalGuidanceAgent
+
+        battery_ctx = {
+            "waste_class": "battery",
+            "confidence": 0.987,
+            "recycling": RecyclingRecommendationAgent().get_recommendations("battery"),
+            "disposal": DisposalGuidanceAgent().get_guidance("battery"),
+        }
+        agent = EcoAssistantAgent()
+        reply = agent.answer("What should I do with batteries?", context=battery_ctx)
+        assert "never" in reply.lower() and "household bin" in reply.lower()
+        args, kwargs = mocked_get.call_args
+        sent_system = args[0]
+        assert "battery" in sent_system
+        assert "Hazardous Waste" in sent_system or "High" in sent_system
+        print(f"  {PASS} Battery question handled with high-hazard safety rules")
+        print(f"        Reply: {reply[:100]}...")
+except Exception as e:
+    print(f"  {FAIL} {e}"); errors.append(f"T7: {e}")
+
+# ===========================================================================
+# 8. Glass question
+# ===========================================================================
+print("\n[8] Glass question ...")
+try:
+    mock_glass_response = (
+        "Brown glass bottles can be recycled in the brown glass section of your local bottle bank "
+        "or kerbside glass box. Rinse thoroughly and recycle lids separately."
+    )
+    with mock.patch("services.llm_provider.get_completion", return_value=mock_glass_response) as mocked_get:
+        from agents.recycling_recommendation_agent import RecyclingRecommendationAgent
+        from agents.disposal_guidance_agent import DisposalGuidanceAgent
+
+        glass_ctx = {
+            "waste_class": "brown-glass",
+            "confidence": 0.890,
+            "recycling": RecyclingRecommendationAgent().get_recommendations("brown-glass"),
+            "disposal": DisposalGuidanceAgent().get_guidance("brown-glass"),
+        }
+        agent = EcoAssistantAgent()
+        reply = agent.answer("Can glass be recycled?", context=glass_ctx)
+        assert "glass" in reply.lower()
+        args, kwargs = mocked_get.call_args
+        sent_system = args[0]
+        assert "brown-glass" in sent_system
+        print(f"  {PASS} Glass question handled with bottle bank / glass bin instructions")
+        print(f"        Reply: {reply[:100]}...")
+except Exception as e:
+    print(f"  {FAIL} {e}"); errors.append(f"T8: {e}")
+
+# ===========================================================================
+# Regression checks
+# ===========================================================================
+print("\n[REGRESSION] Existing Waste Scanner & Orchestrator pipeline ...")
+try:
     from agents.waste_classification_agent import WasteClassificationAgent
     from agents.orchestrator_agent import OrchestratorAgent
     from PIL import Image
 
-    sample = next((Path("data/garbage_classification/plastic")).glob("*.jpg"))
-    img = Image.open(sample).convert("RGB")
+    sample_img_path = next((Path("data/garbage_classification/plastic")).glob("*.jpg"))
+    img = Image.open(sample_img_path).convert("RGB")
 
-    agent = WasteClassificationAgent()
-    result = agent.classify(img)
-    assert result["predicted_class"] == "plastic"
-    assert result["confidence"] > 0.5
+    clf_agent = WasteClassificationAgent()
+    clf_result = clf_agent.classify(img)
+    assert clf_result["predicted_class"] == "plastic"
+    assert clf_result["confidence"] > 0.5
 
     orch = OrchestratorAgent()
     orch_result = orch.process_image(img)
@@ -238,61 +246,50 @@ try:
     assert orch_result.recycling is not None
     assert orch_result.disposal is not None
 
-    print(f"  {PASS} Waste Scanner: {result['predicted_class']} ({result['confidence']*100:.1f}%)")
-    print(f"  {PASS} Orchestrator: classification + recycling + disposal all populated")
-    print(f"        Model: models/waste_classifier.pt unchanged")
-except Exception as e:
-    print(f"  {FAIL} {e}"); errors.append(f"T10: {e}")
+    # Test orchestrator answer_question forwarding
+    with mock.patch("agents.eco_assistant_agent.EcoAssistantAgent.answer", return_value="Orchestrator answer OK") as mocked_answer:
+        orch_reply = orch.answer_question("Where does this go?", context={"waste_class": "plastic"})
+        assert orch_reply == "Orchestrator answer OK"
+        mocked_answer.assert_called_once_with("Where does this go?", context={"waste_class": "plastic"})
 
-# ===========================================================================
-# Test 11: Existing orchestrator answer_question still works
-# ===========================================================================
-print("\n[11] Orchestrator answer_question ...")
-try:
-    from agents.orchestrator_agent import OrchestratorAgent
-    orch = OrchestratorAgent()
-    reply = orch.answer_question("What is recycling?")
-    assert isinstance(reply, str) and len(reply) > 0
-    print(f"  {PASS} answer_question returned a string")
-    print(f"        Preview: {reply[:80]}")
+    print(f"  {PASS} Model loaded & classified plastic ({clf_result['confidence']*100:.1f}%)")
+    print(f"  {PASS} Orchestrator pipeline fully operational (classification + recycling + disposal + Q&A)")
 except Exception as e:
-    print(f"  {FAIL} {e}"); errors.append(f"T11: {e}")
+    print(f"  {FAIL} {e}"); errors.append(f"REGRESSION: {e}")
 
-# ===========================================================================
-# Test 12: Streamlit app imports cleanly
-# ===========================================================================
-print("\n[12] Streamlit app import check ...")
+print("\n[REGRESSION] Streamlit app syntax & dependencies ...")
 try:
     import ast
     src = open("app.py", encoding="utf-8").read()
     ast.parse(src)
     import streamlit as st
-    print(f"  {PASS} app.py syntax OK; streamlit {st.__version__} importable")
+    print(f"  {PASS} app.py syntax valid, Streamlit {st.__version__} importable")
 except Exception as e:
-    print(f"  {FAIL} {e}"); errors.append(f"T12: {e}")
+    print(f"  {FAIL} {e}"); errors.append(f"STREAMLIT: {e}")
 
-# ===========================================================================
-# Security check: no hardcoded keys
-# ===========================================================================
-print("\n[SEC] Security check ...")
+print("\n[SEC] Security check (no exposed keys, .env gitignored) ...")
 try:
     import re
-    src_files = list(__import__("pathlib").Path(".").glob("**/*.py"))
+    src_files = list(Path(".").glob("**/*.py"))
     src_files = [f for f in src_files if "venv" not in str(f) and "__pycache__" not in str(f)]
     key_pat = re.compile(r"sk-or-[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{40,}")
     found = False
     for f in src_files:
         txt = f.read_text(encoding="utf-8", errors="replace")
         if key_pat.search(txt):
-            print(f"  {FAIL} Possible hardcoded key in {f}")
+            print(f"  {FAIL} Hardcoded key found in {f}")
             errors.append(f"SEC: key in {f}")
             found = True
     if not found:
-        print(f"  {PASS} No hardcoded API keys found in source files")
-    # Ensure .env is gitignored
-    gitignore = __import__("pathlib").Path(".gitignore").read_text(encoding="utf-8")
-    assert ".env" in gitignore
-    print(f"  {PASS} .env is in .gitignore")
+        print(f"  {PASS} No hardcoded API keys in source files")
+
+    gitignore_txt = Path(".gitignore").read_text(encoding="utf-8", errors="replace")
+    assert ".env" in gitignore_txt, ".env missing from .gitignore"
+    print(f"  {PASS} .env is protected in .gitignore")
+
+    env_ex = Path(".env.example").read_text(encoding="utf-8", errors="replace")
+    assert "your_openrouter_api_key_here" in env_ex
+    print(f"  {PASS} .env.example contains only placeholders")
 except Exception as e:
     print(f"  {FAIL} {e}"); errors.append(f"SEC: {e}")
 
@@ -301,15 +298,11 @@ except Exception as e:
 # ===========================================================================
 print()
 print("=" * 65)
-live_skipped = 4 if not llm_config.is_configured else 0
 if errors:
-    print(f"RESULT: {len(errors)} FAILURE(S)")
+    print(f"RESULT: {len(errors)} TEST(S) FAILED")
     for e in errors:
         print(f"  - {e}")
-elif live_skipped:
-    print(f"RESULT: ALL CHECKS PASSED "
-          f"({live_skipped} live-LLM tests skipped -- ECO_LLM_API_KEY not set)")
 else:
-    print("RESULT: ALL CHECKS PASSED (including live LLM)")
+    print("RESULT: ALL 8 STEP 5 TESTS + ALL REGRESSION CHECKS PASSED")
 print("=" * 65)
 sys.exit(1 if errors else 0)

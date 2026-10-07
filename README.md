@@ -117,10 +117,10 @@ OrchestratorAgent
 | Step | Task | Status |
 |---|---|---|
 | 1 | Dataset inspection & project scaffold | ✅ Done |
-| 2 | Transfer-learning model training (EfficientNet / MobileNetV3) | ⏳ Pending |
-| 3 | Integrate trained model into WasteClassificationAgent | ⏳ Pending |
-| 4 | LLM integration for EcoAssistantAgent | ⏳ Pending |
-| 5 | Full pipeline testing & UI polish | ⏳ Pending |
+| 2 | Transfer-learning model training (EfficientNet / MobileNetV3) | ✅ Done |
+| 3 | Integrate trained model into WasteClassificationAgent | ✅ Done |
+| 4 | LLM integration for EcoAssistantAgent | ✅ Done |
+| 5 | Full pipeline testing & UI polish | ✅ Done |
 
 ---
 

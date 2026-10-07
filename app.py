@@ -344,8 +344,41 @@ elif page == "🤖 Eco Assistant":
                 "like 'Where should I throw this?' or 'Can I recycle it?'."
             )
 
-    # -- Chat history ----------------------------------------------------
+    # -- Chat history & conversation -------------------------------------
     assistant = EcoAssistantAgent()
+
+    # Show suggestion prompts if chat history is empty
+    if not st.session_state.chat_history:
+        st.markdown("**Suggested questions:**")
+        if scan_context:
+            cols = st.columns(2)
+            prompts = [
+                "What should I do with this?",
+                "Can this be recycled?",
+                "How should I dispose of it?",
+                "Is this harmful to the environment?",
+            ]
+        else:
+            cols = st.columns(2)
+            prompts = [
+                "How do I dispose of a plastic bottle?",
+                "What should I do with batteries?",
+                "Can glass be recycled?",
+                "How can I reduce household waste?",
+            ]
+
+        clicked_prompt = None
+        for idx, p in enumerate(prompts):
+            with cols[idx % 2]:
+                if st.button(p, key=f"sugg_btn_{idx}", use_container_width=True):
+                    clicked_prompt = p
+
+        if clicked_prompt:
+            st.session_state.chat_history.append({"role": "user", "content": clicked_prompt})
+            with st.spinner("Thinking..."):
+                resp = assistant.answer(clicked_prompt, context=scan_context)
+            st.session_state.chat_history.append({"role": "assistant", "content": resp})
+            st.rerun()
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
