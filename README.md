@@ -116,22 +116,10 @@ OrchestratorAgent
 
 | Step | Task | Status |
 |---|---|---|
-| 1 | Dataset inspection & project scaffold | ✅ Done |
-| 2 | Transfer-learning model training (EfficientNet / MobileNetV3) | ✅ Done |
-| 3 | Integrate trained model into WasteClassificationAgent | ✅ Done |
-| 4 | LLM integration for EcoAssistantAgent | ✅ Done |
-| 5 | Full pipeline testing & UI polish | ✅ Done |
+| 1 | Dataset inspection & project scaffold | Done |
+| 2 | Transfer-learning model training (EfficientNet / MobileNetV3) | Done |
+| 3 | Integrate trained model into WasteClassificationAgent | Done |
+| 4 | LLM integration for EcoAssistantAgent | Done |
+| 5 | Full pipeline testing & UI polish | Done |
 
 ---
-
-## ⚠️ Dataset Rules
-
-- Do **not** rename, delete, or modify any original dataset files.
-- Training/validation/test splitting is handled programmatically in Step 2.
-- The `data/` directory is excluded from Git (see `.gitignore`).
-
----
-
-## 📄 License
-
-This project is for educational purposes.
