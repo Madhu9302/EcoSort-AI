@@ -6,7 +6,7 @@ waste from uploaded images and provides recycling and disposal guidance.
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 EcoSort-AI/
@@ -54,7 +54,7 @@ EcoSort-AI/
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Install dependencies
 ```bash
@@ -70,7 +70,7 @@ streamlit run app.py
 
 ---
 
-## 🤖 Agentic Architecture
+## Agentic Architecture
 
 ```
 OrchestratorAgent
@@ -82,7 +82,7 @@ OrchestratorAgent
 
 ---
 
-## 📊 Dataset
+## Dataset
 
 | Property | Value |
 |---|---|
@@ -112,7 +112,7 @@ OrchestratorAgent
 
 ---
 
-## 🗺️ Development Roadmap
+## Development Roadmap
 
 | Step | Task | Status |
 |---|---|---|
